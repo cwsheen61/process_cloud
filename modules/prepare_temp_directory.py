@@ -15,7 +15,7 @@ def prepare_temp_directory(ply_path):
     Returns:
         str: Path to the newly created TEMP directory.
     """
-    base_dir = os.path.dirname(ply_path)
+    base_dir = ply_path
     temp_dir = os.path.join(base_dir, "TEMP")
 
     # 🔹 Ensure a clean start

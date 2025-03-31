@@ -19,7 +19,7 @@ from modules.load_trajectory import load_trajectory
 from modules.load_gnss_trajectory import load_gnss_trajectory
 from modules.compute_global_transform import compute_global_transform
 from modules.prepare_temp_directory import prepare_temp_directory
-from modules.yield_ply_chunks import yield_ply_chunks
+from modules.load_ply_chunks import load_ply_chunks
 from modules.process_chunk import process_chunk
 from modules.merge_laz_files import merge_laz_files
 
@@ -34,6 +34,9 @@ def lineno():
     return inspect.currentframe().f_back.f_lineno
 
 def main():
+    """
+    Main execution pipeline for processing point cloud data using GNSS trajectories.
+    """
     logger.info("🔍 Loading JSON configuration... (%s:%d)", __file__, lineno())
 
     # --- Survey sys.argv for file paths ---
@@ -72,24 +75,37 @@ def main():
 
     try:
         config.set("pathname", ply_path)
-        config.set("files.ply", os.path.join(ply_path, ply_file))
-        for key, default in [
-            ("trajectory", "trajectory.txt"),
-            ("gnss_trajectory", "gnss.txt"),
-            ("transformed_trajectory", "transformed_traj.txt"),
-            ("output_pass", "output_pass.laz"),
-            ("output_fail", "output_fail.laz")]:
-            full = config.get(f"files.{key}", default)
-            if not os.path.isabs(full):
-                full = os.path.join(ply_path, full)
-            config.set(f"files.{key}", full)
+        config.set("files.ply", os.path.join(ply_path, ply_file_path))
+        # Resolve trajectory file path
+        traj_path = config.get("files.trajectory", "trajectory.txt")
+        if not os.path.isabs(traj_path):
+            traj_path = os.path.join(ply_path, traj_path)
+        config.set("files.trajectory", traj_path)
+        # Resolve GNSS trajectory file path
+        gnss_path = config.get("files.gnss_trajectory", "gnss.txt")
+        if not os.path.isabs(gnss_path):
+            gnss_path = os.path.join(ply_path, gnss_path)
+        config.set("files.gnss_trajectory", gnss_path)
+        # Resolve other file paths similarly
+        transformed_traj = config.get("files.transformed_trajectory", "transformed_traj.txt")
+        if not os.path.isabs(transformed_traj):
+            transformed_traj = os.path.join(ply_path, transformed_traj)
+        config.set("files.transformed_trajectory", transformed_traj)
+        output_pass = config.get("files.output_pass", "output_pass.laz")
+        if not os.path.isabs(output_pass):
+            output_pass = os.path.join(ply_path, output_pass)
+        config.set("files.output_pass", output_pass)
+        output_fail = config.get("files.output_fail", "output_fail.laz")
+        if not os.path.isabs(output_fail):
+            output_fail = os.path.join(ply_path, output_fail)
+        config.set("files.output_fail", output_fail)
         config.save()
         logger.info(f"✅ Updated `current_config.json` with dynamic paths: {working_config_file}")
     except Exception as e:
         logger.error(f"❌ Error updating `current_config.json`: {e}")
         sys.exit(1)
 
-    # --- Reload updated config ---
+    # --- Reload updated config for further processing ---
     config = JSONRegistry(current_config_path, current_config_path)
     logger.info("✅ Initialized current config: %s (%s:%d)", current_config_path, __file__, lineno())
 
@@ -97,12 +113,12 @@ def main():
     temp_dir = prepare_temp_directory(ply_path)
     logger.info("📂 Temp directory initialized: %s (%s:%d)", temp_dir, __file__, lineno())
 
-    # --- Load sensor trajectory ---
+    # --- Load trajectory data (sensor) ---
     trajectory_data = load_trajectory(current_config_path)
     traj_file = config.get("files.trajectory")
     logger.info("✅ Loaded trajectory: %s (%s:%d)", traj_file, __file__, lineno())
 
-    # --- Load GNSS trajectory ---
+    # --- Load GNSS trajectory data ---
     gnss_file = config.get("files.gnss_trajectory")
     if not gnss_file:
         logger.error("❌ GNSS trajectory file is missing from config! (%s:%d)", __file__, lineno())
@@ -110,45 +126,43 @@ def main():
     gnss_data = load_gnss_trajectory(current_config_path)
     logger.info("✅ Loaded GNSS trajectory from %s (%s:%d)", gnss_file, __file__, lineno())
 
-    # --- Compute transformation ---
+    # --- Compute global transformation ---
     compute_global_transform(current_config_path)
     logger.info("✅ Global transformation computed and stored in config (%s:%d)", __file__, lineno())
 
+    # --- Reload config to get transformation parameters ---
     config = JSONRegistry(current_config_path, current_config_path)
     R_global = np.array(config.get("transformation.R"))
     t_global = np.array(config.get("transformation.t"))
     crs_epsg = config.get("crs.epsg")
     logger.info("✅ Transformation parameters: R=%s, t=%s, EPSG=%s", R_global, t_global, crs_epsg)
 
-    # --- Yield and process chunks with streaming dispatch ---
-    test_mode = config.get("processing.test_mode", False)
-    test_chunks = config.get("processing.test_chunks", 0)
+    # --- Load point cloud in chunks ---
+    logger.info("🔄 Loading point cloud chunks from %s (%s:%d)", ply_file_path, __file__, lineno())
+    chunks = load_ply_chunks(current_config_path)  # load_ply_chunks extracts needed info from config
+
+    # --- Build argument tuples for each chunk ---
+    args = []
+    for idx, chunk in enumerate(chunks):
+        args.append((idx, chunk, trajectory_data, R_global, t_global, crs_epsg, temp_dir, config))
+
     num_workers = config.get("processing.num_workers", multiprocessing.cpu_count())
+    logger.info("🚀 Processing %d chunks using %d workers. (%s:%d)", len(args), num_workers, __file__, lineno())
 
-    logger.info(f"Current config path: {current_config_path}")
-
-    results = []
+    # --- Process chunks using multiprocessing ---
     with multiprocessing.Pool(processes=num_workers) as pool:
-        for chunk_idx, points in yield_ply_chunks(config):
-            if test_mode and chunk_idx >= test_chunks:
-                logger.info(f"🧪 Test mode halted after {test_chunks} chunks.")
-                break
+        results = pool.map(process_chunk, args)
 
-            logger.info(f"🔍 Chunk {chunk_idx}: {len(points)} points, dtype: {points.dtype}")
-            args_tuple = (chunk_idx, points, trajectory_data, R_global, t_global, crs_epsg, temp_dir, config.config)
-            result = pool.apply_async(process_chunk, args=(args_tuple,))
-            results.append(result)
-
-        final_results = [r.get() for r in results]
-
+    # Unpack results (each is a tuple: (pass_filename, fail_filename))
     try:
-        pass_chunks, fail_chunks = zip(*final_results)
+        pass_chunks, fail_chunks = zip(*results)
     except ValueError:
         pass_chunks, fail_chunks = (), ()
     logger.info("✅ Processing complete. Passed: %d, Failed: %d (%s:%d)",
                 len(pass_chunks), len(fail_chunks), __file__, lineno())
 
-    merge_laz_files(current_config_path)
+    # --- Merge LAZ files ---
+    merge_laz_files(ply_path, config)
     logger.info("✅ LAZ merging completed (%s:%d)", __file__, lineno())
 
 if __name__ == "__main__":

@@ -1,84 +1,78 @@
 import os
-import sys
-import numpy as np
-import laspy
 import logging
+import numpy as np
 from modules.apply_filters import apply_filters
-from modules.apply_transformation import apply_transformation
-from modules.save_partial_laz import save_partial_laz  # ✅ Writes filtered chunks to LAZ
+from modules.save_partial_laz import save_partial_laz
 
-logger = logging.getLogger(__name__)  # ✅ Use logging instead of print()
+from modules.json_registry import JSONRegistry  # ✅ Dot-access config support
+from modules.compute_pseudo_normals import compute_pseudo_normals
+from modules.build_dtype import build_dtype_from_config
+
+logger = logging.getLogger(__name__)
 
 def process_chunk(args_tuple):
-    """
-    Processes a single point cloud chunk:
-    1. Applies filtering based on trajectory data.
-    2. Transforms coordinates using global R (rotation) and T (translation).
-    3. Ensures CRS tracking and prevents double application of transformation.
-    4. Writes pass/fail points to LAZ files.
+    chunk_idx, points, traj_data, R, t, crs_epsg, temp_dir, config = args_tuple
 
-    Args:
-        args_tuple (tuple): Contains:
-            - chunk_idx (int): Index of the chunk being processed.
-            - chunk (np.ndarray): Point cloud data in sensor coordinates.
-            - traj_data (np.ndarray): Sensor trajectory data.
-            - R_global (np.ndarray): 3x3 Rotation matrix.
-            - t_global (np.ndarray): 3D Translation vector.
-            - crs_epsg (int): EPSG code for transformation.
-            - temp_dir (str): Directory to save temporary LAZ files.
-            - config (JSONRegistry): Configuration settings from JSON file.
+    print("============> top of process_chunk.py", flush=True)
 
-    Returns:
-        tuple: (pass_filename, fail_filename)
-    """
-    # Unpack arguments correctly
-    chunk_idx, chunk, traj_data, R_global, t_global, crs_epsg, temp_dir, config = args_tuple
+    logger.info(f"[DEBUG] config type: {type(config)}")
+    logger.info(f"[DEBUG] config dir: {dir(config)}")
+    logger.info(f"[DEBUG] config repr: {repr(config)}")
 
-    logger.info(f"🔹 Processing Chunk {chunk_idx}...")
 
-    # --- Apply filtering using JSON config ---
-    pass_chunk, fail_chunk = apply_filters(chunk, traj_data, config)
+    logger.info("🔹 Processing Chunk %d...", chunk_idx)
 
-    logger.info(f"✅ Chunk {chunk_idx} Filtered: Pass={len(pass_chunk)}, Fail={len(fail_chunk)}")
+    if not isinstance(points, np.ndarray):
+        logger.error(f"[ERROR] Chunk {chunk_idx} is not a NumPy array.")
+        return None, None
 
-    # --- Ensure points are in the correct CRS before transformation ---
-    if len(pass_chunk) > 0:
-        pass_chunk = apply_transformation(pass_chunk, R_global, t_global, crs_epsg)
-    if len(fail_chunk) > 0:
-        fail_chunk = apply_transformation(fail_chunk, R_global, t_global, crs_epsg)
+    if points.size == 0:
+        logger.warning(f"[DEBUG] Chunk {chunk_idx} contained no points.")
+        return None, None
 
-    logger.info(f"🔄 Chunk {chunk_idx} Transformed: Pass={len(pass_chunk)}, Fail={len(fail_chunk)}")
+    logger.info(f"[DEBUG] Chunk {chunk_idx} has {len(points)} points, dtype: {points.dtype}")
+    logger.info(f"[DEBUG] Chunk {chunk_idx} first row: {points[0]}")
 
-    # --- Define output file paths ---
-    pass_filename = os.path.join(temp_dir, f"pass_{chunk_idx}.las") if len(pass_chunk) > 0 else None
-    fail_filename = os.path.join(temp_dir, f"fail_{chunk_idx}.las") if len(fail_chunk) > 0 else None
+    try:
+        pass_chunk, fail_chunk = apply_filters(points, traj_data, config)
+    except Exception as e:
+        logger.error(f"Error applying filters on chunk {chunk_idx}: {e}")
+        return None, None
 
-    # --- Save the pass_chunk ---
-    if pass_filename:
+    # Safely retrieve pseudo_normals flag
+    normals_flag = config.get("processing", {}).get("pseudo_normals", True)
+    print(f"===================> Processing Pseudo_Normals: {normals_flag}")
+
+    if normals_flag:
         try:
-            save_partial_laz(pass_filename, pass_chunk)
-            logger.info(f"📂 Writing Chunk {chunk_idx}: Pass='{pass_filename}'")
+            pass_chunk = compute_pseudo_normals(pass_chunk, traj_data)
         except Exception as e:
-            logger.error(f"❌ ERROR in writing {pass_filename}: {e}")
-            pass_filename = None
+            logger.error(f"Error computing pseudo-normals on chunk {chunk_idx}: {e}")
 
-    # --- Save the fail_chunk ---
-    if fail_filename:
-        try:
-            save_partial_laz(fail_filename, fail_chunk)
-            logger.info(f"📂 Writing Chunk {chunk_idx}: Fail='{fail_filename}'")
-            sys.stdout.flush()  # ✅ Prevents buffering in multiprocessing
-        except Exception as e:
-            logger.error(f"❌ ERROR in writing {fail_filename}: {e}")
-            fail_filename = None
-            sys.stdout.flush()  # ✅ Prevents buffering in multiprocessing
+    try:
+        coords = np.stack([pass_chunk['x'], pass_chunk['y'], pass_chunk['z']], axis=-1)
+        transformed = coords @ R.T + t
+        pass_chunk['x'], pass_chunk['y'], pass_chunk['z'] = transformed[:, 0], transformed[:, 1], transformed[:, 2]
 
-    # --- Final check: Ensure files were actually written ---
-    if pass_filename and not os.path.exists(pass_filename):
-        logger.error(f"❌ Pass LAZ missing: {pass_filename}")
-        pass_filename = None
-    if fail_filename and not os.path.exists(fail_filename):
-        logger.error(f"❌ Fail LAZ missing: {fail_filename}")
-        fail_filename = None
+        if normals_flag:
+            normals = np.stack([pass_chunk['nx'], pass_chunk['ny'], pass_chunk['nz']], axis=-1)
+            rotated_normals = normals @ R.T
+            pass_chunk['nx'], pass_chunk['ny'], pass_chunk['nz'] = rotated_normals[:, 0], rotated_normals[:, 1], rotated_normals[:, 2]
 
-    return pass_filename, fail_filename
+    except Exception as e:
+        logger.error(f"Error transforming chunk {chunk_idx}: {e}")
+        return None, None
+
+    try:
+        pass_filename = os.path.join(temp_dir, f"pass_chunk_{chunk_idx}.laz")
+        fail_filename = os.path.join(temp_dir, f"fail_chunk_{chunk_idx}.laz")
+
+        # Fix: access data_formats with dict syntax
+        save_partial_laz(pass_filename, pass_chunk, config)
+        save_partial_laz(fail_filename, fail_chunk, config)
+
+        return pass_filename, fail_filename
+
+    except Exception as e:
+        logger.error(f"Error saving filtered chunk {chunk_idx}: {e}")
+        return None, None

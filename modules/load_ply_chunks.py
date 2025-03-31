@@ -1,52 +1,58 @@
-import numpy as np
+import os
 import logging
-from modules.data_types import pointcloud_sensor_dtype   # Import globally defined dtype
-from modules.crs_registry import crs_registry  # Ensure CRS tracking
+import numpy as np
+from modules.json_registry import JSONRegistry
+from modules.build_dtype import build_dtype_from_config
 
 logger = logging.getLogger(__name__)
 
-def load_ply_chunks(ply_file, chunk_size):
+def yield_ply_chunks(config_path):
     """
-    Streams chunks of binary PLY data efficiently.
-
-    Args:
-        ply_file (str): Path to the binary PLY file.
-        chunk_size (int): Number of points to read per chunk.
-
+    Generator that reads a PLY file in chunks without loading the entire file into memory.
+    
+    Reads the header (assumed to end with "end_header") and then yields a tuple (chunk_idx, chunk)
+    for each chunk of point data read using np.fromfile.
+    
+    The configuration should include:
+      - "files.ply": Path to the PLY file.
+      - "processing.chunk_size": Number of points to load per chunk.
+      - "pathname": Base directory for relative paths.
+      - "filtering.format_name": The key for the desired point cloud format.
+      - "data_formats": Contains a mapping for the format.
+    
     Yields:
-        np.ndarray: A structured NumPy array containing a chunk of PLY data.
+        tuple: (chunk_idx, chunk) where chunk is a NumPy array of point records.
     """
-    global crs_registry  # Explicitly declare global
+    config = JSONRegistry(config_path, config_path)
+    
+    # Get and resolve the PLY file path.
+    ply_file = config.get("files.ply")
+    base_path = config.get("pathname")
+    if not os.path.isabs(ply_file):
+        ply_file = os.path.join(base_path, ply_file)
+    
+    chunk_size = config.get("processing.chunk_size", 5000000)
+    
+    dtype = build_dtype_from_config(config)
 
     try:
-        crs_registry["points"] = -1  # Using -1 instead of text for SENSOR_COORDS consistency
-
-        logger.info(f"Opening PLY file: {ply_file}")
-
-        with open(ply_file, 'rb') as f:
-            # Skip ASCII header and find binary data start
+        with open(ply_file, "rb") as f:
+            # Read header: assume header ends with "end_header"
+            header = b""
             while True:
-                line = f.readline().decode('utf-8').strip()
-                if line.startswith("end_header"):
+                line = f.readline()
+                header += line
+                if b"end_header" in line:
                     break
-
-            binary_start = f.tell()
-            point_size = np.dtype(pointcloud_sensor_dtype ).itemsize
-            chunk_num = 0
-
+            logger.info(f"PLY header read ({len(header)} bytes). Starting to yield chunks.")
+            
+            chunk_idx = 0
             while True:
-                f.seek(binary_start + chunk_num * chunk_size * point_size)
-                chunk_data = np.fromfile(f, dtype=ppointcloud_sensor_dtype , count=chunk_size)
-                
-                if chunk_data.size == 0:
+                chunk = np.fromfile(f, dtype=dtype, count=chunk_size)
+                if chunk.size == 0:
                     break
-
-                yield chunk_data
-                chunk_num += 1
-
-            logger.info(f"Finished streaming PLY file: {ply_file}")
-
-    except FileNotFoundError:
-        logger.error(f"PLY file not found: {ply_file}")
+                yield (chunk_idx, chunk)
+                chunk_idx += 1
     except Exception as e:
-        logger.error(f"Error reading PLY file '{ply_file}': {e}")
+        logger.error(f"Error reading PLY file in chunks: {e}")
+        raise

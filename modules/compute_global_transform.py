@@ -1,15 +1,17 @@
 import numpy as np
 import os
 import logging
+from pyproj import Transformer, CRS
 from modules.json_registry import JSONRegistry
+from modules.crs_registry import crs_registry
+
+logger = logging.getLogger(__name__)
 
 def compute_global_transform(config_path):
-    """Computes the global transformation from GNSS trajectory data."""
-    logger = logging.getLogger(__name__)
-    
-    # Load config
+    """Computes the global transformation from GNSS trajectory data with UTM conversion."""
+    # Load configuration
     config = JSONRegistry(config_path, config_path)
-    gnss_file = os.path.join(config.get("pathname"), config.get("files.gnss"))
+    gnss_file = config.get("files.gnss_trajectory")
     
     if not os.path.exists(gnss_file):
         logger.error(f"❌ GNSS trajectory file not found: {gnss_file}")
@@ -17,33 +19,131 @@ def compute_global_transform(config_path):
     
     logger.info(f"🔄 Computing global transformation using GNSS file: {gnss_file} ({__name__}:{__import__('inspect').currentframe().f_lineno})")
     
-    # Load GNSS trajectory data
+    # Load GNSS trajectory data; skip the header row
     try:
         gnss_data = np.loadtxt(gnss_file, dtype=np.float64, skiprows=1)
     except Exception as e:
         logger.error(f"❌ Failed to load GNSS trajectory data: {e}")
         raise
     
-    # Extract coordinates from GNSS data
+    # Extract sensor (local) coordinates from columns 0,1,2
     try:
-        traj_x, traj_y, traj_z = gnss_data[:, 0], gnss_data[:, 1], gnss_data[:, 2]
-        gps_x, gps_y, gps_z = gnss_data[:, 3], gnss_data[:, 4], gnss_data[:, 5]
+        traj_x = gnss_data[:, 0]
+        traj_y = gnss_data[:, 1]
+        traj_z = gnss_data[:, 2]
+        # Extract longitude, latitude, and elevation from columns 8,9,10 (0-indexed)
+        gps_lon = gnss_data[:, 8]
+        gps_lat = gnss_data[:, 9]
+        gps_alt = gnss_data[:, 10]
     except IndexError:
         logger.error("❌ Unexpected GNSS data format: insufficient columns.")
         raise ValueError("Unexpected GNSS data format: insufficient columns.")
     
-    # Compute translation
-    t_global = np.mean([gps_x - traj_x, gps_y - traj_y, gps_z - traj_z], axis=1)
+    # Determine UTM zone using mean GNSS longitude and latitude.
+    lon_center = np.mean(gps_lon)
+    lat_center = np.mean(gps_lat)
+    utm_zone = int((lon_center + 180) / 6) + 1
+    hemisphere = "north" if lat_center >= 0 else "south"
+    utm_epsg = f"326{utm_zone}" if hemisphere == "north" else f"327{utm_zone}"
+    logger.info(f"✅ GNSS Data UTM Zone: {utm_zone} ({hemisphere}) → EPSG:{utm_epsg}")
     
-    # Compute rotation: identity matrix for now (placeholder for refinement)
-    R_global = np.eye(3)
+    # Convert GNSS longitude/latitude to UTM coordinates.
+    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+    utm_e, utm_n = transformer.transform(gps_lon, gps_lat)
     
-    # Store results in config.json
-    config.set("transformation.R", R_global.tolist())
-    config.set("transformation.t", t_global.tolist())
+    # Construct GNSS positions in UTM coordinates (using gps_alt for elevation)
+    gnss_utm_positions = np.column_stack((utm_e, utm_n, gps_alt))
+    
+    # For now, assume all points are high quality.
+    high_quality_mask = np.ones(len(gnss_utm_positions), dtype=bool)
+    if np.sum(high_quality_mask) < 3:
+        raise ValueError("❌ Not enough high-quality GNSS points for a stable transformation!")
+    
+    gnss_filtered = gnss_utm_positions[high_quality_mask]
+    traj_filtered = np.column_stack((traj_x, traj_y, traj_z))[high_quality_mask]
+    
+    # Compute transformation (R and t) using SVD.
+    gnss_center = np.mean(gnss_filtered, axis=0)
+    traj_center = np.mean(traj_filtered, axis=0)
+    gnss_shifted = gnss_filtered - gnss_center
+    traj_shifted = traj_filtered - traj_center
+    
+    U, _, Vt = np.linalg.svd(np.dot(gnss_shifted.T, traj_shifted))
+    R = np.dot(Vt.T, U.T)
+    # Enforce Z-axis remains unchanged (identity for Z)
+    R = np.array([
+        [R[0, 0], R[0, 1], 0],
+        [R[1, 0], R[1, 1], 0],
+        [0,       0,       1]
+    ])
+    
+    # Compute translation vector
+    t = gnss_center - np.dot(R, traj_center)
+    
+    # Get the CRS in WKT format.
+    crs = CRS.from_epsg(int(utm_epsg))
+    crs_wkt = crs.to_wkt()
+    
+    # Store computed transformation in the configuration.
+    config.set("crs.epsg", int(utm_epsg))
+    config.set("transformation.R", R.tolist())
+    config.set("transformation.t", t.tolist())
+    config.set("files.gnss_used", gnss_file)
+    crs_registry["trajectory"] = int(utm_epsg)
     config.save()
     
-    logger.info(f"✅ Computed transformation stored in config.json ({__name__}:{__import__('inspect').currentframe().f_lineno})")
+    logger.info(f"✅ Computed Global Transformation:\nR =\n{R}\nt = {t}")
+    logger.info(f"✅ Computed WKT CRS: {crs_wkt}")
+    logger.info("✅ Updated config.json with transformation parameters.")
+
+
+
+# import numpy as np
+# import os
+# import logging
+# from modules.json_registry import JSONRegistry
+
+# def compute_global_transform(config_path):
+#     """Computes the global transformation from GNSS trajectory data."""
+#     logger = logging.getLogger(__name__)
+    
+#     # Load config
+#     config = JSONRegistry(config_path, config_path)
+#     gnss_file = config.get("files.gnss_trajectory")
+    
+#     if not os.path.exists(gnss_file):
+#         logger.error(f"❌ GNSS trajectory file not found: {gnss_file}")
+#         raise FileNotFoundError(f"GNSS trajectory file not found: {gnss_file}")
+    
+#     logger.info(f"🔄 Computing global transformation using GNSS file: {gnss_file} ({__name__}:{__import__('inspect').currentframe().f_lineno})")
+    
+#     # Load GNSS trajectory data
+#     try:
+#         gnss_data = np.loadtxt(gnss_file, dtype=np.float64, skiprows=1)
+#     except Exception as e:
+#         logger.error(f"❌ Failed to load GNSS trajectory data: {e}")
+#         raise
+    
+#     # Extract coordinates from GNSS data
+#     try:
+#         traj_x, traj_y, traj_z = gnss_data[:, 0], gnss_data[:, 1], gnss_data[:, 2]
+#         gps_x, gps_y, gps_z = gnss_data[:, 3], gnss_data[:, 4], gnss_data[:, 5]
+#     except IndexError:
+#         logger.error("❌ Unexpected GNSS data format: insufficient columns.")
+#         raise ValueError("Unexpected GNSS data format: insufficient columns.")
+    
+#     # Compute translation
+#     t_global = np.mean([gps_x - traj_x, gps_y - traj_y, gps_z - traj_z], axis=1)
+    
+#     # Compute rotation: identity matrix for now (placeholder for refinement)
+#     R_global = np.eye(3)
+    
+#     # Store results in config.json
+#     config.set("transformation.R", R_global.tolist())
+#     config.set("transformation.t", t_global.tolist())
+#     config.save()
+    
+#     logger.info(f"✅ Computed transformation stored in config.json ({__name__}:{__import__('inspect').currentframe().f_lineno})")
 
 
 # import os

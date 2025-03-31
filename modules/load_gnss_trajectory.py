@@ -9,10 +9,10 @@ def load_gnss_trajectory(config_path):
     """ Loads the GNSS trajectory data from current_config.json and ensures correct file path resolution. """
 
     # Load current config
-    config = JSONRegistry(config_path, config_path)  # Correct initialization with json_path
-
+    
+    config = JSONRegistry(config_path, config_path)
     # Get GNSS file path
-    gnss_filename = config.get("files.gnss")
+    gnss_filename = config.get("files.gnss_trajectory")
     base_path = config.get("pathname", "")
 
     if not gnss_filename:

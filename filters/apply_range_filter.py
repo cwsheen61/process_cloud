@@ -20,7 +20,7 @@ def apply_range_filter(points, range_config, field_mapping):
     logger.info(f"📏 Filtering points with range between {range_min}m and {range_max}m")
 
     # ✅ Create filter mask
-    mask = (points[:, range_index] >= range_min) & (points[:, range_index] <= range_max)
+    mask = (points['range'] >= range_min) & (points['range'] <= range_max)
 
     logger.info("✅ Range filter applied: %d points kept, %d points removed",
                 np.sum(mask), np.sum(~mask))

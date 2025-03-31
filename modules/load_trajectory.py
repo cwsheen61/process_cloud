@@ -1,21 +1,31 @@
 import numpy as np
-import json
+from modules.json_registry import JSONRegistry
 import os
+import sys
 import logging
+
 
 logger = logging.getLogger(__name__)
 
-def load_trajectory(trajectory_file, config_path):
+def load_trajectory(config_path):
     """Loads the trajectory data from a file and updates the current trajectory state in config."""
     
     # ✅ Load current_config.json
     with open(config_path, "r") as f:
-        config = json.load(f)
+        config = JSONRegistry(config_path, config_path)
 
-    # Ensure trajectory format exists in config
-    if "trajectory_sensor" not in config["data_formats"]:
+    # # Ensure trajectory format exists in config
+    if not config.get("data_formats.trajectory_sensor"):
         logger.error("❌ 'trajectory_sensor' format missing in config!")
         raise ValueError("Missing trajectory_sensor format in config.json")
+
+# Retrieve trajectory file path from the config
+
+    trajectory_file = config.get("files.trajectory")
+
+    if not trajectory_file:
+        logger.error("❌ Trajectory file path is missing in config!")
+        raise ValueError("Missing trajectory file path in config.json")
 
     # Load trajectory data
     try:
@@ -47,11 +57,10 @@ def load_trajectory(trajectory_file, config_path):
         logger.info(f"✅ Loaded trajectory file: {trajectory_file}, {len(trajectory)} entries.")
 
         # Update current trajectory state
-        config["current_trajectory_state"] = "sensor_loaded"
+        config.set("current_trajectory_state", "sensor_loaded")
 
         # ✅ Save updated config
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
+        config.save()
 
         logger.info("📌 Updated current trajectory state: sensor_loaded")
 
