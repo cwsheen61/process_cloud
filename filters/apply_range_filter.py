@@ -3,26 +3,25 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def apply_range_filter(points, range_config, field_mapping):
-    """ Filters points based on range values dynamically. """
+def apply_range_filter(points, filter_params):
+    """
+    Applies a range filter to the input points using the 'range' field.
 
-    # ✅ Ensure 'range' exists in the field mapping
-    if "range" not in field_mapping:
-        logger.error("❌ 'range' field not found in point cloud format!")
-        raise ValueError("Field 'range' not found in format definition.")
+    Args:
+        points (np.ndarray): Structured array of point cloud data.
+        filter_params (dict): Parameters including 'range_min' and 'range_max'.
 
-    # ✅ Get the column index for range dynamically
-    range_index = list(field_mapping.keys()).index("range")
+    Returns:
+        np.ndarray: Boolean mask indicating which points pass the filter.
+    """
+    if 'range' not in points.dtype.names:
+        logger.error("❌ 'range' field not found in point cloud!")
+        raise ValueError("Field 'range' not found in point cloud data.")
 
-    range_min = range_config.get("range_min", float('-inf'))
-    range_max = range_config.get("range_max", float('inf'))
+    range_min = filter_params.get("range_min", 0.0)
+    range_max = filter_params.get("range_max", np.inf)
 
-    logger.info(f"📏 Filtering points with range between {range_min}m and {range_max}m")
+    mask = (points["range"] >= range_min) & (points["range"] <= range_max)
 
-    # ✅ Create filter mask
-    mask = (points['range'] >= range_min) & (points['range'] <= range_max)
-
-    logger.info("✅ Range filter applied: %d points kept, %d points removed",
-                np.sum(mask), np.sum(~mask))
-
+    logger.debug(f"🔎 Range filter [{range_min}, {range_max}] → {np.sum(mask)} / {len(points)} points kept.")
     return mask

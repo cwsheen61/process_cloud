@@ -4,61 +4,111 @@ Yields fixed-size chunks of binary PLY data aligned to full point records.
 """
 
 import os
-import sys
-import logging
 import struct
 import numpy as np
-from modules.build_dtype import build_dtype_from_config
+import logging
 
 logger = logging.getLogger(__name__)
 
-def yield_ply_chunks(config):
-    ply_file_path = config.get("ply_path") or config.get("files.ply")
-    if not ply_file_path or not os.path.isfile(ply_file_path):
-        logger.error("❌ PLY file path is not specified or does not exist in config.")
-        sys.exit(1)
+GPS_EPOCH_OFFSET = 315964800  # seconds between Unix and GPS epoch
 
-    chunk_size = config.get("processing.chunk_size", 5_000_000)
-    dtype = build_dtype_from_config(config)
-    point_size = dtype.itemsize
 
-    print(f"========================{point_size}")
-
-    header_lines = []
-    header_size = 0
-
-    with open(ply_file_path, "rb") as f:
-        # Read header line by line, byte-wise until 'end_header' is reached
+def load_ply_header(ply_path):
+    """Parses the PLY header to extract element count and field types."""
+    with open(ply_path, "rb") as f:
+        header_lines = []
         while True:
-            line = b""
-            while True:
-                char = f.read(1)
-                if not char:
-                    break  # EOF
-                line += char
-                if char == b"\n":
-                    break
-            decoded_line = line.decode("utf-8").strip()
-            header_lines.append(decoded_line)
-            header_size += len(line)
-            if decoded_line == "end_header": break
+            line = f.readline()
+            header_lines.append(line)
+            if line.strip() == b'end_header':
+                break
 
-        
-        chunk_size_points = config.get("processing.chunk_size", 5_000_000)
-        
+    format_map = {
+        "char": "i1", "uchar": "u1",
+        "short": "i2", "ushort": "u2",
+        "int": "i4", "uint": "u4",
+        "float": "f4", "double": "f8"
+    }
 
-        logger.info("PLY header read (%d bytes). Starting to yield chunks.", header_size)
-        logger.info(f"Chunk size: {chunk_size_points}")
-        logger.info(f"Point size: {point_size}")
-        
-        chunk_idx = 0
-        while True:
-            points = np.fromfile(f, dtype=dtype, count=chunk_size_points)
+    field_names = []
+    field_types = []
+    num_points = 0
 
-            yield (chunk_idx, points)
+    for line in header_lines:
+        tokens = line.decode("ascii").strip().split()
+        if not tokens:
+            continue
+        if tokens[0] == "element" and tokens[1] == "vertex":
+            num_points = int(tokens[2])
+        elif tokens[0] == "property":
+            dtype = format_map[tokens[1]]
+            name = tokens[2]
+            field_names.append(name)
+            field_types.append(dtype)
+
+    header_length = sum(len(line) for line in header_lines)
+    dtype = np.dtype(list(zip(field_names, field_types)))
+    return num_points, header_length, dtype
+
+
+def normalize_fields(data, field_map):
+    """Applies field renaming and GPS time conversion."""
+    new_dtype = []
+    rename_dict = {}
+
+    for name in data.dtype.names:
+        if name not in field_map:
+            logger.debug(f"⚠️ Field '{name}' not in map, skipping.")
+            continue
+        new_name = field_map[name]
+        rename_dict[name] = new_name
+        new_dtype.append((new_name, data.dtype[name]))
+
+    # Build new structured array
+    normalized = np.empty(data.shape, dtype=new_dtype)
+    for old_name, new_name in rename_dict.items():
+        normalized[new_name] = data[old_name]
+
+    # Apply GPS time conversion
+    if "GpsTime" in normalized.dtype.names:
+        normalized["GpsTime"] -= GPS_EPOCH_OFFSET
+        logger.debug("🕒 Converted POSIX time to GPS time.")
+
+    return normalized
+
+
+def yield_ply_chunks(config, data_formats, field_map, chunk_size=5_000_000):
+    """
+    Streams chunks of structured point data from a binary PLY file.
+    Renames fields based on `field_map`, and converts POSIX time to GPS time.
+
+    Args:
+        config (JSONRegistry or dict): Loaded configuration.
+        data_formats (dict): Mapping of known point formats (from config).
+        field_map (dict): Dictionary mapping raw PLY names to LAS field names.
+        chunk_size (int): Number of points per chunk.
+
+    Yields:
+        Tuple[int, np.ndarray]: (chunk index, normalized point data)
+    """
+    ply_path = config.get("files.ply")
+    num_points, header_len, raw_dtype = load_ply_header(ply_path)
+
+    logger.info(f"📄 Loaded header from {os.path.basename(ply_path)}: {num_points} points, dtype={raw_dtype}")
+
+    chunk_idx = 0
+    with open(ply_path, "rb") as f:
+        f.seek(header_len)
+        remaining = num_points
+
+        while remaining > 0:
+            to_read = min(chunk_size, remaining)
+            buf = f.read(raw_dtype.itemsize * to_read)
+            chunk = np.frombuffer(buf, dtype=raw_dtype)
+
+            # Normalize field names and convert times
+            norm_chunk = normalize_fields(chunk, field_map)
+
+            yield chunk_idx, norm_chunk
             chunk_idx += 1
-
-            if config.get("processing.test_mode", False):
-                if chunk_idx >= config.get("processing.test_chunks", 10):
-                    logger.info("🧪 Test mode halted after %d chunks.", chunk_idx)
-                    break
+            remaining -= to_read

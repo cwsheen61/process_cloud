@@ -3,44 +3,33 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def apply_motion_filter(points, motion_config, field_mapping):
+def apply_motion_filter(points, filter_params):
     """
-    Filters points based on their motion. The motion is computed as the Euclidean distance 
-    between consecutive points' sensor coordinates (x, y, z). Points that show a difference 
-    below the motion_threshold are filtered out.
+    Applies a motion filter that removes points with very little local variation,
+    based on point-to-point distance.
 
     Args:
-        points (np.ndarray): Structured array of point cloud sensor data.
-        motion_config (dict): Contains key "motion_threshold" (float). 
-                              Points with difference below this threshold are filtered out.
-        field_mapping (dict): Mapping of field names; expected to contain "x", "y", and "z".
+        points (np.ndarray): Structured array of point cloud data.
+        filter_params (dict): Parameters including 'motion_threshold'.
 
     Returns:
-        np.ndarray: Boolean mask with True for points that pass the motion filter.
+        np.ndarray: Boolean mask indicating which points pass the filter.
     """
-    motion_threshold = motion_config.get("motion_threshold", 0.001)
-    logger.info(f"📡 Applying motion filter with threshold {motion_threshold}")
+    required_fields = {"x", "y", "z"}
+    if not required_fields.issubset(points.dtype.names):
+        logger.error(f"❌ Motion filter requires fields: {required_fields}")
+        raise ValueError(f"Missing required fields for motion filtering: {required_fields}")
 
-    # Ensure the required fields exist.
-    for field in ["x", "y", "z"]:
-        if field not in field_mapping:
-            logger.error(f"❌ '{field}' field not found in point cloud format!")
-            raise ValueError(f"Field '{field}' not found in format definition.")
+    threshold = filter_params.get("motion_threshold", 0.01)
 
-    # Extract coordinates from the structured array.
-    x = points["x"].astype(np.float64)
-    y = points["y"].astype(np.float64)
-    z = points["z"].astype(np.float64)
+    # Calculate simple motion magnitude using finite difference
+    coords = np.stack((points["x"], points["y"], points["z"]), axis=1)
+    diffs = np.diff(coords, axis=0)
+    motion_magnitude = np.linalg.norm(diffs, axis=1)
 
-    # Compute differences between consecutive points.
-    # For the first point, we can assume it always passes.
-    dx = np.diff(x, prepend=x[0])
-    dy = np.diff(y, prepend=y[0])
-    dz = np.diff(z, prepend=z[0])
-    distances = np.sqrt(dx**2 + dy**2 + dz**2)
+    # Shift to match original point array length
+    motion_magnitude = np.insert(motion_magnitude, 0, motion_magnitude[0])
+    mask = motion_magnitude > threshold
 
-    # Create a mask: True if the distance is greater than or equal to the threshold.
-    mask = distances >= motion_threshold
-    mask[0] = True  # Always include the first point.
-    logger.info(f"Motion filter: {np.sum(mask)} of {len(points)} points pass.")
+    logger.debug(f"📉 Motion filter threshold: {threshold} → {np.sum(mask)} / {len(points)} points kept.")
     return mask

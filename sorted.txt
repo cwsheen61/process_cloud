@@ -1,0 +1,10 @@
+1000272 -rw-rw-r-- 1 cwsheen cwsheen 1024274350 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A0.bin
+      4 -rw-rw-r-- 1 cwsheen cwsheen         44 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A0_dtype.json
+ 220092 -rw-rw-r-- 1 cwsheen cwsheen  225366150 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A1.bin
+      4 -rw-rw-r-- 1 cwsheen cwsheen         44 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A1_dtype.json
+    160 -rw-rw-r-- 1 cwsheen cwsheen     160500 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A2.bin
+      4 -rw-rw-r-- 1 cwsheen cwsheen         44 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/A2_dtype.json
+     64 -rw-rw-r-- 1 cwsheen cwsheen      61700 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/B1.bin
+      4 -rw-rw-r-- 1 cwsheen cwsheen         44 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/B1_dtype.json
+    104 -rw-rw-r-- 1 cwsheen cwsheen     106250 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/B2.bin
+      4 -rw-rw-r-- 1 cwsheen cwsheen         44 Apr  4 20:33 /home/cwsheen/Workspace/Zion_2024_12/output/SORTED/B2_dtype.json
