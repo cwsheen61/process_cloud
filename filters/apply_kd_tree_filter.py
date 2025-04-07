@@ -1,49 +1,55 @@
 import numpy as np
-from sklearn.neighbors import KDTree
 import logging
+from sklearn.neighbors import KDTree
 
 logger = logging.getLogger(__name__)
 
-def apply_kd_tree_filter(points, params):
+def apply_kd_tree_filter(points, params, header=None):
     """
-    Filters points using a KD-tree-based local density check.
-    Retains points with at least one neighbor within a given distance range.
+    Filters points based on the number of neighbors found within a radius using KD-Tree.
 
     Args:
-        points (np.ndarray): Input point cloud with 'X', 'Y', 'Z'
-        params (dict): Config with:
-            - 'kd_tree_leaf_size': leaf size
-            - 'kd_tree_min_dist': min dist to keep
-            - 'kd_tree_max_dist': max dist to keep
+        points (np.ndarray): Structured NumPy array from LAS data.
+        params (dict): Config dictionary with:
+            - 'kd_tree_min_dist' (optional): minimum distance threshold (in meters)
+            - 'kd_tree_max_dist': maximum distance threshold (in meters)
+            - 'kd_tree_min_neighbors': minimum required neighbors to keep point
+        header (laspy.LasHeader, optional): Required to unscale X/Y/Z
 
     Returns:
-        np.ndarray: Boolean mask of valid points
+        np.ndarray: Boolean mask, True = keep
     """
-    required = ("x", "y", "z")
-    for dim in required:
-        if dim not in points.dtype.names:
-            logger.error(f"❌ Missing required field '{dim}' for KD-tree filter.")
-            raise ValueError(f"Missing required field: '{dim}'")
+    if header is None:
+        raise ValueError("Missing LAS header: required to compute scaled XYZ positions.")
 
-    x = points["x"]
-    y = points["y"]
-    z = points["z"]
-    coords = np.stack([x, y, z], axis=1)
-
-    leaf_size = params.get("kd_tree_leaf_size", 10)
-    min_dist = params.get("kd_tree_min_dist", 0.005)
+    min_dist = params.get("kd_tree_min_dist", 0.0)
     max_dist = params.get("kd_tree_max_dist", 1.0)
+    min_neighbors = params.get("kd_tree_min_neighbors", 1)
+
+    coords = np.stack([
+        points["X"] * header.scales[0] + header.offsets[0],
+        points["Y"] * header.scales[1] + header.offsets[1],
+        points["Z"] * header.scales[2] + header.offsets[2],
+    ], axis=1)
 
     try:
-        tree = KDTree(coords, leaf_size=leaf_size)
-        ind = tree.query_radius(coords, r=max_dist)
+        tree = KDTree(coords)
+        ind = tree.query_radius(coords, r=max_dist, count_only=False)
 
-        # Count how many neighbors each point has in the range
-        mask = np.array([
-            any(min_dist < np.linalg.norm(coords[i] - coords[j]) < max_dist for j in neighbors if j != i)
-            for i, neighbors in enumerate(ind)
-        ])
+        mask = np.full(len(points), False)
 
+        for i, neighbors in enumerate(ind):
+            if min_dist > 0:
+                # filter neighbors inside the min_dist band
+                dists = np.linalg.norm(coords[neighbors] - coords[i], axis=1)
+                count = np.sum((dists >= min_dist) & (dists <= max_dist))
+            else:
+                count = len(neighbors) - 1  # exclude self
+
+            if count >= min_neighbors:
+                mask[i] = True
+
+        logger.debug(f"🌲 KD-Tree: min_dist={min_dist}, max_dist={max_dist}, min_neighbors={min_neighbors} → kept {np.sum(mask)} / {len(points)}")
         return mask
 
     except Exception as e:

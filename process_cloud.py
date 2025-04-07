@@ -4,6 +4,7 @@ Processes a large PLY point cloud using a dense sensor trajectory and a sparse G
 to compute a 3D transformation (rotation about Z and translation). The transformed data is
 optionally converted to a target CRS, streamed in chunks, and stored in LAZ format.
 """
+# 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
 
 # --- Global Imports ---
 import sys
@@ -49,13 +50,39 @@ FIELD_NAME_MAP = {
     "range": "range"
 }
 
+def throttle_num_workers(config):
+    def walk_and_throttle(obj, path=""):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                current_path = f"{path}.{key}" if path else key
+                if key == "num_workers" and isinstance(value, int):
+                    available_cpus = multiprocessing.cpu_count()
+                    if value > available_cpus:
+                        logger.warning(f"⚠️ '{current_path}' has {value} workers; throttling to {available_cpus}")
+                        config.set(current_path, available_cpus)
+                    else:
+                        logger.info(f"✅ '{current_path}' is within CPU limits: {value}")
+                else:
+                    walk_and_throttle(value, current_path)
+        elif isinstance(obj, list):
+            for idx, item in enumerate(obj):
+                walk_and_throttle(item, f"{path}[{idx}]")
+
+    full_config_dict = config.config
+    walk_and_throttle(full_config_dict)
+    config.save()
+    logger.info("✅ Finished throttling all 'num_workers' settings in current_config.json.")
+
+
+
+
 def lineno():
     import inspect
     return inspect.currentframe().f_back.f_lineno
 
  # --- Clean up stale directories ---
 def clean_dirs(ply_path):
-    for dirname in ["TEMP", "SORTED", "COL_LAS"]:
+    for dirname in ["TEMP", "SORTED", "COL_LAS", "TEMP_VOXELS"]:
         full_path = os.path.join(ply_path, dirname)
         if os.path.exists(full_path):
             try:
@@ -109,7 +136,10 @@ def main():
             ("gnss_trajectory", "gnss.txt"),
             ("transformed_trajectory", "transformed_traj.txt"),
             ("output_pass", "output_pass.laz"),
-            ("output_fail", "output_fail.laz")]:
+            ("output_fail", "output_fail.laz"),
+            ("sorted_las", "sorted_final.laz"),
+            ("voxel_las", "voxel_final.laz")]:
+
             full = config.get(f"files.{key}", default)
             if not os.path.isabs(full):
                 full = os.path.join(ply_path, full)
@@ -119,6 +149,9 @@ def main():
     except Exception as e:
         logger.error(f"❌ Error updating `current_config.json`: {e}")
         sys.exit(1)
+
+    throttle_num_workers(config)
+
 
     config = JSONRegistry(current_config_path, current_config_path)
     logger.info("✅ Initialized current config: %s (%s:%d)", current_config_path, __file__, lineno())
@@ -188,10 +221,41 @@ def main():
 
     ret = tiling(config)
 
+
+    # === Optional Post-Sort Filtering ===
+    from filters.post_sort_filters import sorted_knn_filter, sorted_kd_filter, sorted_voxel_grid_filter, merge_voxel_chunks
+
+    sorted_file = config.get("files.sorted_las")
+    if sorted_file and os.path.exists(sorted_file):
+        filter_cfg = config.get("filtering", {})
+
+        if filter_cfg.get("knn_filter", {}).get("enabled", False):
+            logger.info("🧪 Running post-sort KNN filter...")
+            sorted_file = sorted_knn_filter(config)
+
+        if filter_cfg.get("kd_tree_filter", {}).get("enabled", False):
+            logger.info("🧪 Running post-sort KD-tree filter...")
+            sorted_file = sorted_kd_filter(config)
+
+        if filter_cfg.get("voxel_filter", {}).get("enabled", False):
+            logger.info("🧪 Running post-sort Voxel Grid filter...")
+            voxel_dir = sorted_voxel_grid_filter(config)
+            if voxel_dir:
+                merged_voxel_output = config.get("files.voxel_las")
+                merge_voxel_chunks(config)
+
+        config.set("files.sorted_las", sorted_file)
+        config.save()
+    else:
+        logger.warning("⚠️ No sorted LAS file found; skipping post-sort filters.")
+
+
     # --- Final cleanup ---
 
     if not test_mode:
         clean_dirs(ply_path)
+
+
 
 
 if __name__ == "__main__":

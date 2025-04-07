@@ -341,9 +341,8 @@ def tiling(config):
         key=lambda x: extract_column_name(os.path.basename(x).replace("sorted_", "").replace(".las", "").replace(".laz", ""))
     )
 
-    base_name = Path(input_file).stem.replace(".las", "").replace(".laz", "")
-    temp_merged_path = os.path.join(base_path, f"{base_name}_sorted_temp.laz")
-    final_output_path = os.path.join(base_path, f"{base_name}_sorted.laz")
+    final_output_path = config.get("files", {}).get("sorted_las")
+    temp_merged_path = final_output_path.replace(".laz", "_temp.las")
 
     merge_single_group(sorted_files, temp_merged_path)
 
@@ -351,10 +350,6 @@ def tiling(config):
     if epsg and os.path.exists(temp_merged_path):
         logger.info(f"🌐 Injecting CRS using EPSG:{epsg}")
         inject_crs_with_pdal(temp_merged_path, final_output_path, epsg)
-        # try:
-        #     os.remove(temp_merged_path)
-        # except FileNotFoundError:
-        #     pass
     else:
         logger.warning(f"⚠️ Skipping CRS injection: EPSG={epsg}, File exists? {os.path.exists(temp_merged_path)}")
 

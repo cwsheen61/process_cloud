@@ -2,15 +2,12 @@ import numpy as np
 import logging
 from filters.apply_range_filter import apply_range_filter
 from filters.apply_motion_filter import apply_motion_filter
-from filters.apply_knn_filter import apply_knn_filter
-from filters.apply_kd_tree_filter import apply_kd_tree_filter
+
 
 # Mapping from filter key names to their implementation functions
 FILTER_FUNCTIONS = {
     "range_filter": apply_range_filter,
     "motion_filter": apply_motion_filter,
-    "knn_filter": apply_knn_filter,
-    "kd_tree_filter": apply_kd_tree_filter,
 }
 
 logger = logging.getLogger(__name__)
