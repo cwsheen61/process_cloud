@@ -1,0 +1,24 @@
+{
+  "pipeline": [
+    {
+      "type": "readers.las",
+      "filename": "/home/cwsheen/Workspace/Zion_2024_12/output/global_georeferenced_wildcat_filtered.laz"
+    },
+    {
+      "type": "filters.sort",
+      "dimension": "Z"
+    },
+    {
+      "type": "filters.sort",
+      "dimension": "Y"
+    },
+    {
+      "type": "filters.sort",
+      "dimension": "X"
+    },
+    {
+      "type": "writers.las",
+      "filename": "/home/cwsheen/Workspace/Zion_2024_12/output/global_georeferenced_wildcat_filtered_sorted.laz"
+    }
+  ]
+}

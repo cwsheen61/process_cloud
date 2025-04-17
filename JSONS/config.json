@@ -1,0 +1,173 @@
+{
+  "run_name": "last_config",
+  "pathname": "",
+  "files": {
+    "ply": "",
+    "trajectory": "global_georeferenced_wildcat_traj.txt",
+    "gnss_trajectory": "global_georeferenced_projection_wildcat_fit_metrics.txt",
+    "output_pass": "global_georeferenced_wildcat_filtered.laz",
+    "output_fail": "global_georeferenced_wildcat_residuals.laz",
+    "transformed_trajectory": "transformed_trajectory.laz",
+    "sorted_las": "global_georeferenced_wildcat_sorted_final.laz",
+    "voxel_las": "global_georeferenced_wildcat_voxelized.las"
+  },
+  "processing": {
+    "chunk_size": 5000000,
+    "num_workers": 30,
+    "test_mode": false,
+    "test_chunks": 5,
+    "pseudo_normals": true,
+    "grid_size": 250.0
+  },
+  "filtering": {
+    "format_name": "pointcloud_sensor",
+    "range_filter": {
+      "enabled": true,
+      "range_min": 2.5,
+      "range_max": 300.0
+    },
+    "motion_filter": {
+      "enabled": true,
+      "motion_threshold": 0.005
+    },
+    "knn_filter": {
+      "enabled": true,
+      "knn_neighbors": 10.0,
+      "knn_distance_threshold": 1.0,
+      "chunk_size": 500000,
+      "num_workers": 5
+    },
+    "kd_tree_filter": {
+      "enabled": false,
+      "kd_tree_leaf_size": 10,
+      "kd_tree_min_dist": 0.01,
+      "kd_tree_max_dist": 1.0,
+      "chunk_size": 1000000,
+      "num_workers": 10
+    },
+    "voxel_filter": {
+      "enabled": true,
+      "voxel_size": 0.005,
+      "min_points_per_voxel": 1,
+      "output_density_units": "pts_per_cm3",
+      "chunk_size": 5000000,
+      "num_workers": 10
+    }
+  },
+  "logs": {
+    "log_level": "INFO",
+    "log_to_file": true,
+    "log_filename": "process.log"
+  },
+  "data_formats": {
+    "pointcloud_sensor": {
+      "time": "float64",
+      "x": "float64",
+      "y": "float64",
+      "z": "float64",
+      "intensity": "float32",
+      "ring": "uint8",
+      "returnNum": "uint8",
+      "range": "float32"
+    },
+    "trajectory_sensor": {
+      "time": "float64",
+      "x": "float64",
+      "y": "float64",
+      "z": "float64",
+      "qw": "float64",
+      "qx": "float64",
+      "qy": "float64",
+      "qz": "float64"
+    },
+    "point_cloud_with_normals": {
+      "time": "float64",
+      "x": "float64",
+      "y": "float64",
+      "z": "float64",
+      "intensity": "float32",
+      "ring": "uint8",
+      "returnNum": "uint8",
+      "range": "float32",
+      "nx": "float32",
+      "ny": "float32",
+      "nz": "float32"
+    },
+    "gnss_trajectory": {
+      "traj_x": "float64",
+      "traj_y": "float64",
+      "traj_z": "float64",
+      "gps_x": "float64",
+      "gps_y": "float64",
+      "gps_z": "float64",
+      "gps_reported_error_norm": "float64",
+      "gps_reported_horizontal_error_norm": "float64",
+      "longitude": "float64",
+      "latitude": "float64",
+      "height": "float64",
+      "error_norm": "float32",
+      "horizontal_error_norm": "float32",
+      "scaled_error_norm": "float32",
+      "horizontal_scaled_error_norm": "float32",
+      "fix_quality": "uint8"
+    },
+    "paintcloud_sensor": {
+      "time": "float64",
+      "x": "float64",
+      "y": "float64",
+      "z": "float64",
+      "nx": "float64",
+      "ny": "float64",
+      "nz": "float64",
+      "r": "uint8",
+      "g": "uint8",
+      "b": "uint8"
+    },
+    "paintcloud_with_range": {
+      "time": "float64",
+      "x": "float64",
+      "y": "float64",
+      "z": "float64",
+      "nx": "float64",
+      "ny": "float64",
+      "nz": "float64",
+      "r": "uint8",
+      "g": "uint8",
+      "b": "uint8",
+      "range": "float32"
+    }
+  },
+  "valid_states": [
+    "sensor_point_cloud",
+    "transformed_crs_point_cloud",
+    "filtered_point_cloud",
+    "final_output_laz"
+  ],
+  "valid_trajectory_states": [
+    "sensor_trajectory",
+    "transformed_trajectory",
+    "final_output_laz"
+  ],
+  "current_state": "sensor_point_cloud",
+  "current_trajectory_state": "sensor_trajectory",
+  "crs": {
+    "point_cloud_current_crs": "SENSOR",
+    "trajectory_current_crs": "SENSOR",
+    "utm_code": "",
+    "target_crs": "UTM",
+    "epsg_code": 0,
+    "wkt": ""
+  },
+  "transformation": {
+    "num_transforms": 0,
+    "initial_crs": "SENSOR",
+    "intermediate_crs": "UTM",
+    "final_crs": "UTM",
+    "R": [
+      [1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0],
+      [0.0, 0.0, 1.0]
+    ],
+    "t": [0.0, 0.0, 0.0]
+  }
+}

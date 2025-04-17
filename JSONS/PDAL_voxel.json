@@ -1,0 +1,16 @@
+{
+  "pipeline": [
+    "merged_final_with_crs.las",
+    {
+      "type": "filters.voxelgrid",
+      "cell": 0.05  // voxel size in meters
+    },
+    {
+      "type": "writers.las",
+      "filename": "merged_voxel_filtered.las",
+      "extra_dims": "all",
+      "dataformat_id": 1,
+      "minor_version": 4
+    }
+  ]
+}
